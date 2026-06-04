@@ -1,5 +1,6 @@
 import json
 import re
+import html
 
 def clean_truths():
     input_file = "truth_archive.json"
@@ -35,6 +36,7 @@ def clean_truths():
                 continue
                 
             # clean text
+            content = html.unescape(content)
             # force single line
             clean_content = re.sub(r'[\r\n\t]+', ' ', content)
             clean_content = clean_content.replace('\xa0', ' ')
@@ -42,7 +44,7 @@ def clean_truths():
             clean_content = re.sub(r' +', ' ', clean_content).strip()
             
             # write
-            f_out.write(clean_content + "\n")
+            f_out.write(clean_content + " <|endoftext|>\n")
             kept_posts += 1
 
     print("\n--- Extraction Complete ---")
