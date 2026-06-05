@@ -171,6 +171,8 @@ class BigramLanguageModel(nn.Module):
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, idx_next), dim=1)
+            if idx_next.item() == enc.eot_token:
+                break
         return idx
 
 if __name__ == "__main__":
@@ -232,6 +234,10 @@ if __name__ == "__main__":
         optimizer = torch.optim.AdamW(m.parameters(), lr=LEARNING_RATE)
 
         print("\nStarting training...")
+        best_val_loss = float('inf')
+        patience = 5
+        patience_counter = 0
+
         for iter in range(MAX_ITERS):
             lr = get_lr(iter)
             for param_group in optimizer.param_groups:
@@ -240,6 +246,18 @@ if __name__ == "__main__":
             if iter % EVAL_INTERVAL == 0 or iter == MAX_ITERS - 1:
                 losses = estimate_loss(m, train_data, val_data)
                 print(f"\nstep {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.6f}")
+                
+                if losses['val'] < best_val_loss:
+                    best_val_loss = losses['val']
+                    patience_counter = 0
+                    print(f"--> Best validation loss reached ({best_val_loss:.4f})! Saving model...")
+                    torch.save(m.state_dict(), args.weights_path)
+                else:
+                    patience_counter += 1
+                    print(f"--> Validation loss did not improve. Patience: {patience_counter}/{patience}")
+                    if patience_counter >= patience:
+                        print(f"\nEarly stopping triggered! Training stopped to prevent overfitting.")
+                        break
             elif iter % 10 == 0:
                 print(".", end="", flush=True)
 
@@ -251,13 +269,11 @@ if __name__ == "__main__":
             torch.nn.utils.clip_grad_norm_(m.parameters(), GRAD_CLIP)
             optimizer.step()
 
-        print("Training complete.")
-        print(f"Saving model weights to {args.weights_path}...")
-        torch.save(m.state_dict(), args.weights_path)
-        print("Save complete.")
+        print("Training complete. Best weights are saved.")
 
     elif args.mode == 'generate':
         print(f"Using device: {DEVICE}")
+        torch.seed() # randomize seed for generation so output changes each time
 
         print(f"Loading model weights from {args.weights_path}...")
         if not os.path.exists(args.weights_path):
