@@ -178,7 +178,7 @@ class BigramLanguageModel(nn.Module):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train or generate text with a Language Model.")
     parser.add_argument('--mode', choices=['train', 'generate'], required=True)
-    parser.add_argument('--weights_path', type=str, default='model_weights.pth')
+    parser.add_argument('--weights_path', type=str, default='TrumpGPT-Base-v1.pth')
     parser.add_argument('--max_new_tokens', type=int, default=500)
     parser.add_argument('--prompt', type=str, default='\n')
     
