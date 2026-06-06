@@ -9,13 +9,13 @@ from transformers import (
     EarlyStoppingCallback,
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from trl import SFTTrainer
+from trl import SFTTrainer, SFTConfig
 import argparse
 
 def main():
-    parser = argparse.ArgumentParser(description="Fine-tune Gemma 3 using QLoRA")
+    parser = argparse.ArgumentParser(description="Fine-tune Llama 3.1 using QLoRA")
     parser.add_argument("--dataset", type=str, default="qa_dataset.jsonl", help="Path to the JSONL Q&A dataset")
-    parser.add_argument("--model_id", type=str, default="google/gemma-3-12b-it", help="HuggingFace Model ID")
+    parser.add_argument("--model_id", type=str, default="meta-llama/Llama-3.1-8B-Instruct", help="HuggingFace Model ID")
     parser.add_argument("--output_dir", type=str, default="./results", help="Output directory for model checkpoints")
     parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
     args = parser.parse_args()
@@ -50,7 +50,7 @@ def main():
         args.model_id,
         quantization_config=bnb_config,
         device_map="auto", # auto pick gpu
-        attn_implementation="flash_attention_2" if torch.cuda.is_bf16_supported() else "eager"
+        attn_implementation="sdpa" if torch.cuda.is_bf16_supported() else "eager"
     )
     
     # turn on grad checkpointing to save vram
@@ -59,26 +59,27 @@ def main():
 
     # 5. LoRA Configuration
     peft_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
+        r=8,               # reduced rank to save VRAM
+        lora_alpha=16,     # scaled alpha accordingly
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         lora_dropout=0.1,  # bumped to stop overfitting
         bias="none",
         task_type="CAUSAL_LM"
     )
     
-    model = get_peft_model(model, peft_config)
-    model.print_trainable_parameters()
+    # SFTTrainer will automatically apply the PEFT config to the base model.
+    # We no longer need to manually wrap it with get_peft_model.
 
     # 6. Training Arguments
-    training_arguments = TrainingArguments(
+    training_arguments = SFTConfig(
+        max_length=1024,               # increased to 1024; fits comfortably in 12GB VRAM
         output_dir=args.output_dir,
         num_train_epochs=1,                # decreased, 1-2 epochs usually good for fine-tuning
         per_device_train_batch_size=1,
         gradient_accumulation_steps=8,
         eval_strategy="steps",             # check eval occasionally
         eval_steps=50,                     
-        optim="paged_adamw_32bit",
+        optim="paged_adamw_8bit",          # switched to 8-bit to save VRAM
         save_steps=50,
         logging_steps=10,
         learning_rate=2e-4,
@@ -91,7 +92,6 @@ def main():
         max_grad_norm=0.3,
         max_steps=-1,
         warmup_ratio=0.03,
-        group_by_length=True,
         lr_scheduler_type="cosine",
         report_to="none" # turn off wandb for now
     )
@@ -103,23 +103,10 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         peft_config=peft_config,
-        dataset_text_field="messages", # trl auto handles chat templates
-        max_seq_length=1024,           # keep seq len small so i dont oom
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         args=training_arguments,
         callbacks=[EarlyStoppingCallback(early_stopping_patience=2)], # abort if eval loss goes up twice
     )
-
-    # Apply the chat template to the messages column
-    def format_chat_template(row):
-        row["messages"] = tokenizer.apply_chat_template(row["messages"], tokenize=False)
-        return row
-        
-    train_dataset = train_dataset.map(format_chat_template, num_proc=4)
-    eval_dataset = eval_dataset.map(format_chat_template, num_proc=4)
-    trainer.train_dataset = train_dataset
-    trainer.eval_dataset = eval_dataset
-    trainer.dataset_text_field = "messages"
 
     # 8. Train!
     print("Starting training...")
